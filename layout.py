@@ -16,7 +16,9 @@ st.set_page_config(layout="wide", page_title="Economic Mobility Dashboard. This 
 def load_data(path):
     return pd.read_csv(path)
 
+# df = load_data('C:/Users/Mark Crisci/Downloads/dream_92.csv')
 df = load_data('dream_92.csv')
+
 
 # --- Sidebar Configs ---
 st.sidebar.header("Dashboard Controls")
