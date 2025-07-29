@@ -12,6 +12,8 @@ def load_data(path):
 
 
 df = "dream.csv"
+load_data(df)
+
 
 st.set_page_config(layout="wide", page_title="Economic Mobility Dashboard")
 
