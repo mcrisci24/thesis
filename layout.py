@@ -158,7 +158,7 @@ tabs = st.tabs([
 
 # ====================== TAB 0: Mobility Calculator ====================== #
 with tabs[0]:
-    st.title("The American Dream: An Economic Mobility Dashboard")
+    st.title("The American Dream: A Dashboard for Relative Economic Mobility")
     start_range = get_quintile_range(start_quintile, start_quintile_comp, quintile_options)
     goal_range = get_quintile_range(goal_quintile, goal_quintile_comp, quintile_options)
 
