@@ -12,7 +12,8 @@ st.set_page_config(layout="wide", page_title="Dream: An Economic Mobility Dashbo
 def load_data(path):
     return pd.read_csv(path)
 
-DATA_PATH = "C:/Users/Mark Crisci/Downloads/dream_92.csv"
+DATA_PATH = "dream_92.csv"
+
 df = load_data(DATA_PATH)
 
 # --- Sidebar Inputs ---
