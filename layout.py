@@ -11,7 +11,7 @@ def load_data(path):
     return pd.read_csv(path)
 
 
-df = load_data("dream.csv")
+df = "dream.csv"
 
 st.set_page_config(layout="wide", page_title="Economic Mobility Dashboard")
 
