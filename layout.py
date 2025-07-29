@@ -14,12 +14,16 @@ DATA_PATH = "dream_92.csv"
 
 df = load_data(DATA_PATH)
 
+df = df[df['year'] != 1992].copy()  # <-- REMOVE 1992 FROM WHOLE DATASET as it has 0 for everyone in 1992--flawed
+
 st.set_page_config(layout="wide", page_title="Economic Mobility Dashboard")
 
 # Sidebar controls
 st.sidebar.header("Mobility Calculator Options")
 
-years = sorted(df['year'].unique())
+# years = sorted(df['year'].unique())
+# years_with_all = ['All years'] + years
+years = sorted([y for y in df['year'].unique()])
 years_with_all = ['All years'] + years
 quintile_options = ["lowest", "second", "third", "fourth", "top"]
 comp_options = ["Exact", "No higher than", "No lower than"]
@@ -46,27 +50,68 @@ def get_quintile_range(q, comp, q_opts):
     else:
         return [q]
 
+# @st.cache_data
+# def robust_achievers_single_year(
+#     df, start_quintile_range, goal_quintile_range, time_horizon, start_year=None
+# ):
+#     df = df[df['quintile_label'].isin(quintile_options)].copy()
+#     df = df[df['year'] != 1992].sort_values(["family_person", "year"])
+#     achievers = []
+#     denominator = set()
+#     achievers_map = dict()  # Will map PID to list of (sy, goal_y) pairs
+#
+#     for pid, group in df.groupby("family_person"):
+#         years = group['year'].values
+#         quintiles = group['quintile_label'].values
+#
+#         # Get valid start years (not 1992)
+#         if start_year is None:
+#             possible_starts = years[np.isin(quintiles, start_quintile_range)]
+#             possible_starts = possible_starts[possible_starts != 1992]
+#         else:
+#             if int(start_year) == 1992:
+#                 continue
+#             mask = (years == int(start_year)) & np.isin(quintiles, start_quintile_range)
+#             possible_starts = years[mask]
+#
+#         if len(possible_starts) == 0:
+#             continue
+#
+#         found_windows = []
+#         for sy in possible_starts:
+#             goal_y = sy + time_horizon
+#             if goal_y == 1992 or goal_y not in years:
+#                 continue
+#             idx = np.where(years == goal_y)[0][0]
+#             denominator.add(pid)
+#             if quintiles[idx] in goal_quintile_range:
+#                 found_windows.append((sy, goal_y))
+#
+#         if found_windows:
+#             achievers.append(pid)
+#             achievers_map[pid] = found_windows
+#         elif len(possible_starts) > 0:
+#             denominator.add(pid)
+#
+#     return achievers, len(achievers), len(denominator), achievers_map
+
 @st.cache_data
 def robust_achievers_single_year(
     df, start_quintile_range, goal_quintile_range, time_horizon, start_year=None
 ):
-    df = df[df['quintile_label'].isin(quintile_options)].copy()
-    df = df[df['year'] != 1992].sort_values(["family_person", "year"])
+    df = df[df['quintile_label'].isin(quintile_options)].sort_values(["family_person", "year"])
     achievers = []
     denominator = set()
-    achievers_map = dict()  # Will map PID to list of (sy, goal_y) pairs
+    achievers_map = dict()
 
     for pid, group in df.groupby("family_person"):
         years = group['year'].values
         quintiles = group['quintile_label'].values
 
-        # Get valid start years (not 1992)
+        # Get valid start years
         if start_year is None:
             possible_starts = years[np.isin(quintiles, start_quintile_range)]
-            possible_starts = possible_starts[possible_starts != 1992]
         else:
-            if int(start_year) == 1992:
-                continue
             mask = (years == int(start_year)) & np.isin(quintiles, start_quintile_range)
             possible_starts = years[mask]
 
@@ -76,7 +121,7 @@ def robust_achievers_single_year(
         found_windows = []
         for sy in possible_starts:
             goal_y = sy + time_horizon
-            if goal_y == 1992 or goal_y not in years:
+            if goal_y not in years:
                 continue
             idx = np.where(years == goal_y)[0][0]
             denominator.add(pid)
@@ -90,6 +135,8 @@ def robust_achievers_single_year(
             denominator.add(pid)
 
     return achievers, len(achievers), len(denominator), achievers_map
+
+
 
 #quintile colors for income trend plotting (tab 3)
 quintile_colors = {
@@ -517,3 +564,4 @@ with tabs[5]:
 st.markdown("---")
 st.markdown(
     "**DISCLAIMER:** The information contained in this dashboard reflects average probabilities and should not be interpreted in absolute terms. Life is not always easy and hardwork will always improve your odds of success. Certainly, anything can happen 😊! However, in this pursuit it is imperative to maintain selfless community values to support and promote a society with high 'neighborhood quality' avoid rampant individualism that historical ensured inequalities persisted. One may define rampant individualism as a society's collective proclivity to pursue an undefinable, subjective, and continually-changing view of success—independent of help—fueled by the notion that America is rich in opportunity and success is limitless; the absence of opportunity combined with rampant individualism, however, ensures issues persist, and a large portion population is unable to compete in the capitalist system (Chetty, p ,2024). By and large, most Americans still believe that success is the product of individual effort. The myth that hard work will allow anyone to overcome even the most difficult circumstances has endured across the centuries—even in the face of evidence to the contrary. Though this ‘boot-strap’ mentality is not entirely false, this myth creates the idea that the poorest in America can work hard and achieve anything. The notion that the United States is a “mythical land of plenty” in which the individual is free to secure success is belied by the fact that success is shaped-and at times pre-conditioned by forces largely outside of individual control—class, race/ethnicity, and gender. A primary source of inspiration for this dashboard was the work completed by Dr. Raj Chetty's team at Opportunity Insights who identified a variable they call 'neighborhood quality' as the most impactful variables for upward mobility. ")
+
