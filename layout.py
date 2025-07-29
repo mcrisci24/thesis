@@ -49,7 +49,38 @@ def get_quintile_range(q, comp, q_opts):
         return [q]
 
 @st.cache_data(show_spinner="Finding robust achievers (revised logic)...")
-def robust_achievers_corrected(df, start_quintile_range, goal_quintile_range, time_horizon, consec_years, quintile_options):
+# def robust_achievers_corrected(df, start_quintile_range, goal_quintile_range, time_horizon, consec_years, quintile_options, restrict_start_year=None):
+#     df = df[df['quintile_label'].isin(quintile_options)].copy()
+#     df = df.sort_values(["family_person", "year"])
+#     robust_set = set()
+#     valid_denominator = set()
+#     for pid, group in df.groupby("family_person"):
+#         years = group['year'].values
+#         quintiles = group['quintile_label'].values
+#         # Find all possible start years
+#         start_years = years[np.isin(quintiles, start_quintile_range)]
+#         if restrict_start_year is not None:
+#             # Only look at the *specific* start year
+#             start_years = [y for y in start_years if y == restrict_start_year]
+#         for sy in start_years:
+#             idx = np.where(years == sy)[0][0]
+#             horizon_idx = np.where(years >= sy + time_horizon)[0]
+#             if len(horizon_idx) == 0:
+#                 continue
+#             start_goal_idx = horizon_idx[0]
+#             window_idx = np.arange(start_goal_idx, start_goal_idx + consec_years)
+#             if window_idx[-1] >= len(years):
+#                 continue
+#             valid_denominator.add(pid)
+#             window_quints = [quintiles[i] for i in window_idx]
+#             if all(q in goal_quintile_range for q in window_quints):
+#                 robust_set.add(pid)
+#                 break
+#     n_achievers = len(robust_set)
+#     n_total = len(valid_denominator)
+#     return list(robust_set), n_achievers, n_total
+
+def robust_achievers_corrected(df, start_quintile_range, goal_quintile_range, time_horizon, consec_years, quintile_options,restrict_start_year=None):
     df = df[df['quintile_label'].isin(quintile_options)].copy()
     df = df.sort_values(["family_person", "year"])
     robust_set = set()
@@ -58,6 +89,9 @@ def robust_achievers_corrected(df, start_quintile_range, goal_quintile_range, ti
         years = group['year'].values
         quintiles = group['quintile_label'].values
         start_years = years[np.isin(quintiles, start_quintile_range)]
+        # Only allow start_years to be the restrict_start_year if set:
+        if restrict_start_year is not None:
+            start_years = [y for y in start_years if y == restrict_start_year]
         if len(start_years) == 0:
             continue
         for start_year in start_years:
@@ -104,7 +138,8 @@ tab_titles = [
     "Matrix Check",
     "Income Trends",
     "Income Trends: Mean, Median & Std Dev",
-    "Ever Reached Comparison"
+    "Ever Reached Comparison",
+    "Multi-Person Income Trajectories"
 ]
 tabs = st.tabs(tab_titles)
 
@@ -128,10 +163,16 @@ with tabs[0]:
         achiever_ids, n_achievers, n_total = robust_achievers_corrected(
             df, start_quintile_range, goal_quintile_range, time_horizon, consec_years, quintile_options)
     else:
-        cohort_ids = df[(df['year'] == int(start_year)) & (df['quintile_label'].isin(start_quintile_range))]['family_person'].unique()
-        df_cohort = df[df['family_person'].isin(cohort_ids)].copy()
+        sy = int(start_year)
+        # Identify those who are in the start quintile in the specific start year
+        eligible_ids = df[(df['year'] == sy) & (df['quintile_label'].isin(start_quintile_range))][
+            'family_person'].unique()
+        # Only pass all years for those people to the function!
+        df_cohort = df[df['family_person'].isin(eligible_ids)].copy()
+        # But, inside robust_achievers_corrected, restrict valid start windows to ONLY the specific year
         achiever_ids, n_achievers, n_total = robust_achievers_corrected(
-            df_cohort, start_quintile_range, goal_quintile_range, time_horizon, consec_years, quintile_options)
+            df_cohort, start_quintile_range, goal_quintile_range, time_horizon, consec_years, quintile_options,
+            restrict_start_year=sy)
 
     if n_total == 0:
         st.warning("No valid cases found for these criteria.")
@@ -147,37 +188,79 @@ with tabs[0]:
         plot_id = st.selectbox("Select an individual ID to plot trajectory:", achiever_ids, index=0)
         col1, col2 = st.columns([4, 1])
         with col2:
-            plot_yaxis = st.radio("Plot y-axis:", ["Quintile (1–5)", "head_labor_income"], index=0, key="plot_yaxis_side")
-        person_data = df[(df['family_person'] == plot_id) & (df['head_labor_income'] > 0)].copy()
-        person_data = person_data.sort_values("year")
-        person_data['quintile_num'] = person_data['quintile_label'].map(quintile_num)
-        yvar = 'quintile_num' if plot_yaxis == "Quintile (1–5)" else 'head_labor_income'
-        ytitle = "Income Quintile (1=Lowest, 5=Top)" if yvar == "quintile_num" else "Head Labor Income ($)"
-        fig = px.line(person_data, x="year", y=yvar, title=f"Trajectory for ID {plot_id}", markers=True)
-        if yvar == "quintile_num":
-            fig.update_yaxes(title=ytitle, tickmode='linear', dtick=1)
+            plot_yaxis = st.radio("Plot y-axis:", ["Quintile (1–5)", "head_labor_income"], index=0,
+                                  key="plot_yaxis_side")
+
+        # Use the correct data source for this individual!
+        if start_year == "All years":
+            # Find this individual's full trajectory from the full df
+            person_data = df[(df['family_person'] == plot_id) & (df['head_labor_income'] > 0)].copy()
         else:
-            fig.update_yaxes(title=ytitle, tickformat=",", rangemode="tozero", showgrid=True)
-        group = person_data
-        start_years = group[group["quintile_label"].isin(start_quintile_range)]["year"].values
-        years_arr = group["year"].values
-        quintiles_arr = group["quintile_label"].values
-        found = False
-        for sy in start_years:
-            desired_years = np.arange(sy + time_horizon, sy + time_horizon + consec_years)
-            mask = np.isin(years_arr, desired_years)
-            if mask.sum() == consec_years and np.all([q in goal_quintile_range for q in quintiles_arr[mask]]):
-                fig.add_vline(x=sy, line_dash="dash", line_color="green", annotation_text="Start", annotation_position="top left")
-                fig.add_vline(x=sy + time_horizon, line_dash="dash", line_color="orange", annotation_text="Time Horizon", annotation_position="top right")
-                goal_years = years_arr[mask]
-                goal_vals = person_data[person_data['year'].isin(goal_years)][yvar]
-                fig.add_scatter(x=goal_years, y=goal_vals, mode="markers", marker=dict(symbol='x', color="red", size=14), name="Goal Years")
-                found = True
-                break
-        if not found:
-            st.info("Selected individual does not have a trajectory that fits the chosen criteria in any year window.")
-        with col1:
-            st.plotly_chart(fig, use_container_width=True)
+            # Only consider cohort for this start_year and restrict years >= start_year (optional)
+            person_data = df_cohort[
+                (df_cohort['family_person'] == plot_id) & (df_cohort['head_labor_income'] > 0)
+                ].copy()
+            person_data = person_data[person_data['year'] >= int(start_year)]
+
+        if person_data.empty:
+            st.warning("No income records for this person.")
+        else:
+            person_data = person_data.sort_values("year")
+            person_data['quintile_num'] = person_data['quintile_label'].map(quintile_num)
+            yvar = 'quintile_num' if plot_yaxis == "Quintile (1–5)" else 'head_labor_income'
+            ytitle = "Income Quintile (1=Lowest, 5=Top)" if yvar == "quintile_num" else "Head Labor Income ($)"
+            fig = px.line(person_data, x="year", y=yvar, title=f"Trajectory for ID {plot_id}", markers=True)
+            if yvar == "quintile_num":
+                fig.update_yaxes(title=ytitle, tickmode='linear', dtick=1)
+            else:
+                fig.update_yaxes(title=ytitle, tickformat=",", rangemode="tozero", showgrid=True)
+
+            # ------- NEW LOGIC FOR WINDOW HIGHLIGHTING --------
+            # This person only qualifies as an achiever by meeting robust mobility at least once
+            # We'll plot/highlight ONLY the first window (for visual clarity)
+            years_arr = person_data["year"].values
+            quintiles_arr = person_data["quintile_label"].values
+
+            found = False
+            if start_year == "All years":
+                # All valid start years for this person
+                start_years = person_data[person_data["quintile_label"].isin(start_quintile_range)]["year"].values
+            else:
+                sy = int(start_year)
+                if sy in person_data[person_data["quintile_label"].isin(start_quintile_range)]["year"].values:
+                    start_years = np.array([sy])
+                else:
+                    start_years = np.array([])
+
+            for sy in start_years:
+                # Get the N *actual* next available survey years, not just calendar years!
+                possible_goal_years = years_arr[years_arr > sy + time_horizon - 1]  # survey years after horizon
+                # You need to get the first N years after the time horizon
+                window_start_idx = np.where(years_arr == sy + time_horizon)[0]
+                if len(window_start_idx) == 0:
+                    continue
+                idx = window_start_idx[0]
+                goal_years = years_arr[idx:idx + consec_years]
+                if len(goal_years) < consec_years:
+                    continue
+                # Check if all those years are present and in goal range
+                mask = np.isin(years_arr, goal_years)
+                if np.all([q in goal_quintile_range for q in quintiles_arr[mask]]):
+                    fig.add_vline(x=sy, line_dash="dash", line_color="green", annotation_text="Start",
+                                  annotation_position="top left")
+                    fig.add_vline(x=goal_years[0], line_dash="dash", line_color="orange",
+                                  annotation_text="Time Horizon", annotation_position="top right")
+                    goal_vals = person_data[person_data['year'].isin(goal_years)][yvar]
+                    fig.add_scatter(x=goal_years, y=goal_vals, mode="markers",
+                                    marker=dict(symbol='x', color="red", size=14), name="Goal Years")
+                    found = True
+                    break  # Only show the first window they succeeded in
+
+            if not found:
+                st.info(
+                    "Selected individual does not have a trajectory that fits the chosen criteria in any year window.")
+            with col1:
+                st.plotly_chart(fig, use_container_width=True)
 
     with st.expander("Show: How robust mobility probability is calculated (method/math)", expanded=False):
         st.markdown("""
@@ -472,6 +555,87 @@ with tabs[4]:
         fig.update_traces(texttemplate='%{text:.2f}%', textposition="outside")
         st.plotly_chart(fig, use_container_width=True)
     st.info(f"**Calculation Explanation:** {explanation}")
+
+
+# ========== TAB 5: Multi-Person Income Trajectories ========== #
+# ========== TAB 5: Multi-Person Income Trajectories ========== #
+with tabs[5]:
+    st.header("Multi-Person Income Trajectories")
+
+    year_min, year_max = int(df['year'].min()), int(df['year'].max())
+    year_range = st.slider("Select year range to display:", min_value=year_min, max_value=year_max,
+                           value=(year_min, year_max), step=1)
+
+    df_range = df[(df['year'] >= year_range[0]) & (df['year'] <= year_range[1])].copy()
+    available_ids = df_range['family_person'].unique()
+    default_ids = list(available_ids[:3])
+    selected_ids = st.multiselect(
+        "Select up to 10 individual IDs to visualize:",
+        options=available_ids,
+        default=default_ids,
+        max_selections=10
+    )
+
+    if selected_ids:
+        df_plot = df_range[df_range['family_person'].isin(selected_ids)].copy()
+        # Map quintile to number for plotting
+        df_plot['quintile_num'] = df_plot['quintile_label'].map(lambda q: quintile_options.index(q) + 1 if q in quintile_options else np.nan)
+
+        col1, col2 = st.columns([4, 1])
+        with col2:
+            plot_yaxis_multi = st.radio(
+                "Plot y-axis:",
+                ["head_labor_income", "Quintile (1–5)"],
+                index=0,
+                key="plot_yaxis_multi"
+            )
+
+        with col1:
+            if plot_yaxis_multi == "head_labor_income":
+                yvar = "head_labor_income"
+                ytitle = "Head Labor Income ($)"
+                fig = px.line(
+                    df_plot, x="year", y=yvar, color="family_person", line_group="family_person",
+                    markers=True, title="Head Labor Income Trajectories",
+                    labels={"head_labor_income": "Head Labor Income ($)", "year": "Year", "family_person": "Individual ID"},
+                    template="plotly_white"
+                )
+                fig.update_layout(
+                    yaxis_title=ytitle,
+                    xaxis_title="Year",
+                    legend_title_text="ID",
+                    height=500
+                )
+                fig.update_yaxes(tickformat=",")
+            else:
+                yvar = "quintile_num"
+                ytitle = "Income Quintile (1=Lowest, 5=Top)"
+                fig = px.line(
+                    df_plot, x="year", y=yvar, color="family_person", line_group="family_person",
+                    markers=True, title="Income Quintile Trajectories",
+                    labels={"quintile_num": ytitle, "year": "Year", "family_person": "Individual ID"},
+                    template="plotly_white"
+                )
+                fig.update_layout(
+                    yaxis_title=ytitle,
+                    xaxis_title="Year",
+                    legend_title_text="ID",
+                    height=500
+                )
+                fig.update_yaxes(tickmode='linear', dtick=1, range=[0.9, 5.1])
+
+            st.plotly_chart(fig, use_container_width=True)
+
+    else:
+        st.info("Select at least one ID to display income trajectories.")
+
+    with st.expander("How to use this tab"):
+        st.markdown(
+            "- **Select up to 10 people** to visualize their income journeys.\n"
+            "- **Toggle the y-axis** between Head Labor Income and Income Quintile.\n"
+            "- Use the slider to restrict the year range shown.\n"
+            "- Useful for exploring heterogeneity in income dynamics."
+        )
 
 
 # --- Footer ---
