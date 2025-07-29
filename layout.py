@@ -4,7 +4,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 
-st.set_page_config(layout="wide", page_title="Economic Mobility Dashboard")
+st.set_page_config(layout="wide", page_title="The American Dream: A Dashboard for Relative Economic Mobility")
 
 @st.cache_data
 def load_data(path):
@@ -16,7 +16,6 @@ df = load_data(DATA_PATH)
 
 df = df[df['year'] != 1992].copy()  # <-- REMOVE 1992 FROM WHOLE DATASET as it has 0 for everyone in 1992--flawed
 
-st.set_page_config(layout="wide", page_title="Economic Mobility Dashboard")
 
 # Sidebar controls
 st.sidebar.header("Mobility Calculator Options")
