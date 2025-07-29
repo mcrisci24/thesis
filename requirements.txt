@@ -3,6 +3,3 @@ pandas
 numpy
 plotly
 matplotlib
-matplotlib.pyplot
-plotly.express
-plotly.graph_objects
