@@ -10,102 +10,94 @@ st.set_page_config(layout="wide", page_title="Economic Mobility Dashboard")
 def load_data(path):
     return pd.read_csv(path)
 
-df = load_data('dream_92.csv')
 
+df = load_data("C:/Users/Mark Crisci/Downloads/dream.csv")
 
-# --- Sidebar Configs ---
-st.sidebar.header("Dashboard Controls")
+st.set_page_config(layout="wide", page_title="Economic Mobility Dashboard")
+
+# Sidebar controls
+st.sidebar.header("Mobility Calculator Options")
+
 years = sorted(df['year'].unique())
 years_with_all = ['All years'] + years
 quintile_options = ["lowest", "second", "third", "fourth", "top"]
 comp_options = ["Exact", "No higher than", "No lower than"]
 
-start_year = st.sidebar.selectbox("Start Year (Childhood):", years_with_all)
-start_quintile_comp = st.sidebar.selectbox("Start Quintile Comparison:", comp_options)
-start_quintile = st.sidebar.selectbox("Start Quintile (Childhood):", quintile_options)
-goal_quintile_comp = st.sidebar.selectbox("Goal Quintile Comparison:", comp_options)
-goal_quintile = st.sidebar.selectbox("Goal Quintile:", quintile_options, index=4)
-time_horizon = st.sidebar.number_input("Time Horizon (years):", 1, 40, 10)
-consec_years = st.sidebar.number_input("Consecutive Years in Goal Quintile:", 1, 25, 3)
+start_year = st.sidebar.selectbox("Select A Start Year (childhood):", years_with_all, index=0)
+start_quintile_comp = st.sidebar.selectbox("Start Quintile Comparison:", comp_options, index=0)
+start_quintile = st.sidebar.selectbox("Select A Start Quintile (childhood):", quintile_options, index=0)
+time_horizon = st.sidebar.number_input("Time horizon (years):", min_value=1, max_value=40, value=10)
+goal_quintile_comp = st.sidebar.selectbox("GOAL Quintile Comparison:", comp_options, index=0)
+goal_quintile = st.sidebar.selectbox("Select A GOAL Quintile:", quintile_options, index=4)
 
-# --- Helper Functions ---
-def get_quintile_range(q, comp):
-    idx = quintile_options.index(q)
+# -- Remove 1992 from years list for sidebar and all logic
+years = sorted([y for y in df['year'].unique() if y != 1992])
+years_with_all = ['All years'] + years
+
+def get_quintile_range(q, comp, q_opts):
+    idx = q_opts.index(q)
     if comp == "Exact":
         return [q]
     elif comp == "No higher than":
-        return quintile_options[:idx + 1]
-    else:  # "No lower than"
-        return quintile_options[idx:]
+        return q_opts[:idx+1]
+    elif comp == "No lower than":
+        return q_opts[idx:]
+    else:
+        return [q]
 
-# === NEW: Correct survey year windowing function from Script 1 ===
-def get_consecutive_available_years(start_from, consec, available_years):
-    sorted_years = sorted(available_years)
-    if start_from not in sorted_years:
-        sorted_years.append(start_from)
-        sorted_years = sorted(sorted_years)
-    idx = sorted_years.index(start_from)
-    next_years = sorted_years[idx + 1:idx + 1 + consec]
-    return next_years
-
-# === NEW: robust_achievers from Script 1 ===
 @st.cache_data
-def robust_achievers(df, start_range, goal_range, horizon, consec, start_year=None):
-    df_filtered = df[df['quintile_label'].isin(quintile_options)].sort_values(["family_person", "year"])
-    achievers_info = {}  # Stores {pid: first_achieving_sy_found}
-    valid = set()  # Stores PIDs that are potential starters (denominator)
+def robust_achievers_single_year(
+    df, start_quintile_range, goal_quintile_range, time_horizon, start_year=None
+):
+    df = df[df['quintile_label'].isin(quintile_options)].copy()
+    df = df[df['year'] != 1992].sort_values(["family_person", "year"])
+    achievers = []
+    denominator = set()
+    achievers_map = dict()  # Will map PID to list of (sy, goal_y) pairs
 
-    for pid, group in df_filtered.groupby("family_person"):
+    for pid, group in df.groupby("family_person"):
         years = group['year'].values
         quintiles = group['quintile_label'].values
 
-        # SPECIFIC START YEAR scenario:
-        if start_year is not None:
-            if start_year in years:
-                idx = np.where(years == start_year)[0][0]
-                if quintiles[idx] in start_range:
-                    end_year = start_year + horizon + consec - 1
-                    if years[-1] >= end_year:
-                        valid.add(pid)  # Add to denominator if potential starter
-                        goal_years = get_consecutive_available_years(start_year + horizon - 1, consec, years)
-                        goal_mask = np.isin(years, goal_years)
-                        if goal_mask.sum() == consec and all(q in goal_range for q in quintiles[goal_mask]):
-                            achievers_info[pid] = start_year  # Store the specific start_year
-
-        # ALL YEARS scenario:
+        # Get valid start years (not 1992)
+        if start_year is None:
+            possible_starts = years[np.isin(quintiles, start_quintile_range)]
+            possible_starts = possible_starts[possible_starts != 1992]
         else:
-            person_is_potential_starter_candidate = False
+            if int(start_year) == 1992:
+                continue
+            mask = (years == int(start_year)) & np.isin(quintiles, start_quintile_range)
+            possible_starts = years[mask]
 
-            for idx, sy in enumerate(years):
-                if quintiles[idx] in start_range:
-                    end_year = sy + horizon + consec - 1
-                    if years[-1] >= end_year:
-                        person_is_potential_starter_candidate = True  # Has at least one starting point with enough data
-                        goal_years = get_consecutive_available_years(sy + horizon - 1, consec, years)
-                        mask_goal_years_exist = np.isin(years, goal_years)
-                        if mask_goal_years_exist.sum() == consec and all(q in goal_range for q in quintiles[mask_goal_years_exist]):
-                            if pid not in achievers_info:
-                                achievers_info[pid] = sy
-            if person_is_potential_starter_candidate:
-                valid.add(pid)
-    return list(achievers_info.keys()), len(achievers_info), len(valid), achievers_info
+        if len(possible_starts) == 0:
+            continue
 
-# --- Everything else remains the same except for replacing calls/logic to use above robust functions. ---
+        found_windows = []
+        for sy in possible_starts:
+            goal_y = sy + time_horizon
+            if goal_y == 1992 or goal_y not in years:
+                continue
+            idx = np.where(years == goal_y)[0][0]
+            denominator.add(pid)
+            if quintiles[idx] in goal_quintile_range:
+                found_windows.append((sy, goal_y))
 
-def ever_reached_goal(df, start_range, goal_range):
-    reached = 0
-    total = 0
-    reached_ids = []
+        if found_windows:
+            achievers.append(pid)
+            achievers_map[pid] = found_windows
+        elif len(possible_starts) > 0:
+            denominator.add(pid)
 
-    df_filtered = df[df['quintile_label'].isin(quintile_options)]
-    for pid, group in df_filtered.groupby("family_person"):
-        quintiles = group.sort_values("year")['quintile_label'].values
-        if any(q in start_range for q in quintiles):
-            total += 1
-            if any(q in goal_range for q in quintiles):
-                reached += 1
-                reached_ids.append(pid)
-    return reached, total, reached_ids
+    return achievers, len(achievers), len(denominator), achievers_map
+
+#quintile colors for income trend plotting (tab 3)
+quintile_colors = {
+    'top': '#9467bd',
+    'fourth': '#1f77b4',
+    'third': '#2ca02c',
+    'second': '#ff7f0e',
+    'lowest': '#d62728'
+}
 
 # --- Tab Layout ---
 tabs = st.tabs([
@@ -117,18 +109,16 @@ tabs = st.tabs([
     "Multi-Person Income Trajectories"
 ])
 
-# ====================== TAB 1: Mobility Calculator ====================== #
+# ====================== TAB 0: Mobility Calculator ====================== #
 with tabs[0]:
     st.title("The American Dream: An Economic Mobility Dashboard")
-
-    start_range = get_quintile_range(start_quintile, start_quintile_comp)
-    goal_range = get_quintile_range(goal_quintile, goal_quintile_comp)
+    start_range = get_quintile_range(start_quintile, start_quintile_comp, quintile_options)
+    goal_range = get_quintile_range(goal_quintile, goal_quintile_comp, quintile_options)
 
     if start_year == "All years":
-        result = robust_achievers(df, start_range, goal_range, time_horizon, consec_years, start_year=None)
+        result = robust_achievers_single_year(df, start_range, goal_range, time_horizon)
     else:
-        result = robust_achievers(df, start_range, goal_range, time_horizon, consec_years, start_year=int(start_year))
-
+        result = robust_achievers_single_year(df, start_range, goal_range, time_horizon, int(start_year))
     achiever_ids, n_achievers, n_total, achievers_map = result
 
     if n_total == 0:
@@ -137,159 +127,303 @@ with tabs[0]:
         st.success(f"Probability: {n_achievers / n_total:.2%} ({n_achievers}/{n_total})")
         st.info(f"Achiever IDs (first 20): {achiever_ids[:20]}")
 
+    # Plot individual trajectory
     if achiever_ids:
         st.subheader("Individual Mobility Trajectory")
         plot_id = st.selectbox("Select an individual ID to plot trajectory:", achiever_ids, index=0)
         col1, col2 = st.columns([4, 1])
-
         with col2:
             plot_yaxis = st.radio("Plot y-axis:", ["Quintile (1–5)", "head_labor_income"], index=0)
-
-        person_data = df[(df['family_person'] == plot_id) & (df['head_labor_income'] > 0)].copy()
+        # person_data = df[(df['family_person'] == plot_id) & (df['head_labor_income'] > 0)].copy()
+        person_data = df[(df['family_person'] == plot_id)].copy()
         person_data = person_data.sort_values("year")
-        person_data['quintile_num'] = person_data['quintile_label'].map({
-            'lowest': 1, 'second': 2, 'third': 3, 'fourth': 4, 'top': 5
-        })
-
+        quintile_num_map = {q: i+1 for i, q in enumerate(quintile_options)}
+        person_data['quintile_num'] = person_data['quintile_label'].map(quintile_num_map)
         yvar = 'quintile_num' if plot_yaxis == "Quintile (1–5)" else 'head_labor_income'
         ytitle = "Income Quintile (1=Lowest, 5=Top)" if yvar == "quintile_num" else "Head Labor Income ($)"
-
-        fig = px.line(person_data, x="year", y=yvar,
-                      title=f"Trajectory for ID {plot_id}", markers=True)
+        fig = px.line(person_data, x="year", y=yvar, title=f"Trajectory for ID {plot_id}", markers=True)
         if yvar == "quintile_num":
             fig.update_yaxes(title=ytitle, tickmode='linear', dtick=1)
         else:
             fig.update_yaxes(title=ytitle, tickformat=",", rangemode="tozero", showgrid=True)
 
-        # --- Highlight Goal Window Years Only If Present ---
-        sy_to_plot = achievers_map.get(plot_id)
-        if sy_to_plot is not None:
-            years_arr = person_data["year"].values
-            quintiles_arr = person_data["quintile_label"].values
-            goal_years = get_consecutive_available_years(sy_to_plot + time_horizon - 1, consec_years, years_arr)
-            mask = np.isin(years_arr, goal_years)
-            if mask.sum() == consec_years and np.all([q in goal_range for q in quintiles_arr[mask]]):
-                fig.add_vline(x=sy_to_plot, line_dash="dash", line_color="green", annotation_text="Start", annotation_position="top left")
-                fig.add_vline(x=sy_to_plot + time_horizon, line_dash="dash", line_color="orange", annotation_text="Time Horizon", annotation_position="top right")
-                goal_vals = person_data[person_data['year'].isin(goal_years)][yvar]
-                fig.add_scatter(
-                    x=goal_years,
-                    y=goal_vals,
-                    mode="markers",
-                    marker=dict(symbol='x', color="red", size=14),
-                    name="Goal Years"
-                )
-            else:
-                st.info(
-                    f"Selected individual {plot_id} was identified as an achiever, but their specific achievement path starting in {sy_to_plot} could not be fully visualized with the current plotting criteria. This might occur due to subtle data gaps or if a different achievement path was the basis for their inclusion.")
-        else:
-            st.info("Selected individual does not have a trajectory that fits the chosen criteria.")
+        # --- Add horizon lines for each success window this individual achieved ---
+        sy_goal_pairs = achievers_map.get(plot_id, [])
+        for sy, gy in sy_goal_pairs:
+            if sy != 1992:
+                fig.add_vline(x=sy, line_dash="dash", line_color="green", annotation_text="Start",
+                              annotation_position="top left")
+            if gy != 1992:
+                fig.add_vline(x=gy, line_dash="dash", line_color="orange", annotation_text="Goal Year",
+                              annotation_position="top right")
 
         with col1:
             st.plotly_chart(fig, use_container_width=True)
 
-        # --- Optional: Secondary Reach Probability ---
-        reached, total_starting, reached_ids = ever_reached_goal(df, start_range, goal_range)
-        if total_starting > 0:
-            st.info(f"🔄 Ever Reached Goal (Even Once): {reached / total_starting:.2%} ({reached}/{total_starting})")
-            with st.expander("IDs Who Ever Reached Goal (first 20)", expanded=False):
-                st.write(reached_ids[:20])
-
-    # --- Debugging Section for Verification ---
-    with st.expander("🔎 DEBUG: Verify Achiever Logic for Selected ID", expanded=False):
-        if achiever_ids:
-            selected_debug_id = st.selectbox("Select ID to verify logic:", achiever_ids, key="debug_id")
-            debug_data = df[df['family_person'] == selected_debug_id].sort_values("year")
-            st.write("Full Quintile History:")
-            st.dataframe(debug_data[['year', 'quintile_label']])
-
-            debug_sy = achievers_map.get(selected_debug_id)
-            st.markdown(f"**Start Year:** {debug_sy}  ")
-            st.markdown(f"**Time Horizon:** {time_horizon}  → Checking from: `{debug_sy + time_horizon}`")
-
-            person_years = debug_data['year'].values
-            person_quintiles = debug_data['quintile_label'].values
-            goal_years = get_consecutive_available_years(debug_sy + time_horizon - 1, consec_years, person_years)
-
-            st.markdown(f"**Goal Years Window (Next {consec_years} available):** {goal_years}")
-
-            if len(goal_years) >= consec_years:
-                mask = np.isin(person_years, goal_years)
-                q_slice = person_quintiles[mask]
-                st.markdown("**Observed Quintiles in Goal Window:**")
-                for y, q in zip(goal_years, q_slice):
-                    st.markdown(f"- {y}: {q}")
-
-                if all(q in goal_range for q in q_slice):
-                    st.success("✅ Achiever logic confirmed — all goal years in required quintile.")
-                else:
-                    st.error("❌ Achiever flagged, but not all goal years match goal quintile.")
-            else:
-                st.warning("⚠️ Not enough available survey years after horizon to verify.")
-
-    with st.expander("Explanation of how robust mobility probability is calculated (method/math)", expanded=False):
+    # DEBUG
+    with st.expander("How mobility probability is calculated (method/math)", expanded=False):
         st.markdown("""
-**Robust Mobility Probability Calculation:**
-- For a chosen starting quintile and year, we find all individuals in the dataset who were in that quintile and year.
-- We track those same individuals to a future year (based on the selected time horizon) and require they remain in the target quintile for **consecutive years**, as defined by the **robustness window** parameter.
-- The **robustness window** sets the number of consecutive years an individual must stay in the goal quintile for their transition to count as robust.
+            **Mobility Probability Calculation:**
+            - For a chosen starting quintile (and year, or all years), we find all individuals in the dataset who were in that quintile.
+            - We track those same individuals to a future year (the 'time horizon' after start year), and check whether they reached the goal quintile.
+            
+            Each person can only “count” once in the probability calculation, and only for their first valid transition after each start window.
 
-- The probability is:
-""")
+            If someone makes the move multiple times (from start → goal, after the time horizon), they are only counted once in the denominator and numerator.
+
+            If someone reached and stayed in the goal quintile for several years, they are still only counted for being in the goal quintile at the first checked year after the horizon.
+
+            A person is NOT require staying in the goal quintile for multiple years.
+
+            People are NOT excluded who move to the goal quintile and then leave it, as long as they reached it at the right check year after the start+time horizon, they are counted as an achiever.
+
+            If a person leaves and later re-enters the goal quintile at another valid window, they are still only counted once.
+
+
+            - The probability is:
+        """)
         st.latex(
-            r"P(\text{Robust Mobility}) = \frac{\text{Achieved and sustained for N years}}{\text{Eligible starters}}")
-        st.markdown("""
-This is an **empirical estimate** of conditional probability using real PSID longitudinal data.
-       """)
+            r"P(\text{Mobility}) = \frac{\text{Number who reach goal at horizon}}{\text{Number who started in start quintile}}"
+        )
+        st.markdown("This is an empirical estimate using real PSID longitudinal data.")
 
-# --- Tabs 1, 2, 3 (Matrix Check, Income Trends, Mean/Median/Std Dev) remain as in your Script 2 ---
+# --- Make sure you define robust_achievers_single_year as above ---
+# --- Also, define quintile_colors, quintile_options as in your code ---
 
-# ============= TAB 4: Ever Reached Comparison (Early vs Later Years) ============= #
-with tabs[4]:
-    st.header("Ever Reached Goal: Early vs. Later Periods (1968–1995 vs 1996–2022)")
-
-    ever_calc_mode = st.selectbox(
-        "Calculation Method:",
-        [
-            "Ever Reached (Plain)",
-            "Robust Mobility (Consecutive Years & Horizon)"
-        ]
+# ========== TAB 1: Matrix Check ==========
+with tabs[1]:
+    st.header("Mobility Matrix Check")
+    quintile_order = ['lowest', 'second', 'third', 'fourth', 'top']
+    df['quintile_label'] = pd.Categorical(df['quintile_label'], categories=quintile_order, ordered=True)
+    transition_counts = df.groupby(['year', 'quintile_label'])['family_person'].nunique().reset_index()
+    fig_matrix = px.bar(
+        transition_counts,
+        x='year',
+        y='family_person',
+        color='quintile_label',
+        category_orders={'quintile_label': quintile_order},
+        color_discrete_map=quintile_colors,
+        title="Number of People in Each Quintile by Year",
+        labels={'family_person': 'Unique Individuals', 'quintile_label': 'Quintile'},
+        template='plotly_white'
     )
+    st.plotly_chart(fig_matrix, use_container_width=True)
 
-    start_range = get_quintile_range(start_quintile, start_quintile_comp)
-    goal_range = get_quintile_range(goal_quintile, goal_quintile_comp)
+    # Animated Income Distribution & Static Side-by-Side
+    st.subheader("Income Quintile Distribution: 1968, 1993, 2022")
+    percents = {
+        'lowest': [35.12, 40.70, 38.83],
+        'second': [25.46, 21.60, 28.41],
+        'third': [18.26, 18.45, 19.10],
+        'fourth': [11.99, 12.77, 8.58],
+        'top': [9.02, 6.48, 5.09]
+    }
+    years_ = ['1968', '1993', '2022']
+    df_animated = pd.DataFrame([
+        {"Year": str(year), "Quintile": quintile, "Percentage": percents[quintile][i]}
+        for i, year in enumerate(years_)
+        for quintile in percents.keys()
+    ])
+    fig_animated = px.bar(
+        df_animated,
+        x='Quintile',
+        y='Percentage',
+        color='Quintile',
+        animation_frame='Year',
+        text='Percentage',
+        title='Animated Income Distribution by Quintile (1968 → 1993 → 2022)',
+        range_y=[0, 45],
+        template='plotly_white',
+        color_discrete_map=quintile_colors
+    )
+    fig_animated.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
+    fig_animated.update_layout(
+        showlegend=False,
+        yaxis_title='Percentage (%)',
+        xaxis_title='Income Quintile',
+        height=500,
+        updatemenus=[{
+            "type": "buttons",
+            "buttons": [
+                {
+                    "label": "Play",
+                    "method": "animate",
+                    "args": [None, {
+                        "frame": {"duration": 2500, "redraw": True},
+                        "fromcurrent": True,
+                        "transition": {"duration": 3000, "easing": "cubic-in-out"}
+                    }]
+                },
+                {
+                    "label": "Pause",
+                    "method": "animate",
+                    "args": [[None], {
+                        "frame": {"duration": 0, "redraw": False},
+                        "mode": "immediate",
+                        "transition": {"duration": 0}
+                    }]
+                }
+            ]
+        }],
+        sliders=[{
+            "active": 0,
+            "steps": [
+                {
+                    "label": year,
+                    "method": "animate",
+                    "args": [[year], {
+                        "mode": "immediate",
+                        "frame": {"duration": 2500, "redraw": True},
+                        "transition": {"duration": 1000}
+                    }]
+                } for year in df_animated["Year"].unique()
+            ]
+        }]
+    )
+    with st.expander("▶ Show Animated Quintile Distribution", expanded=False):
+        st.plotly_chart(fig_animated, use_container_width=True)
 
+    df_static = pd.DataFrame([
+        {"Year": str(year), "Quintile": quintile, "Percentage": percents[quintile][i]}
+        for i, year in enumerate(years_)
+        for quintile in percents.keys()
+    ])
+    fig_static = px.bar(
+        df_static,
+        x='Quintile',
+        y='Percentage',
+        color='Year',
+        barmode='group',
+        text='Percentage',
+        title='Distribution of Income by Quintile (1968 vs 1993 vs 2022)',
+        template='plotly_white',
+        color_discrete_sequence=px.colors.qualitative.Set1
+    )
+    fig_static.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
+    fig_static.update_layout(
+        yaxis_title='Percentage (%)',
+        xaxis_title='Income Quintile',
+        height=500,
+        legend_title_text='Survey Year',
+    )
+    with st.expander("▶ Show Distribution of Income by Quintile (1968 vs 1993 vs 2022)", expanded=False):
+        st.plotly_chart(fig_static, use_container_width=True)
+
+
+# ========== TAB 2: Income Trends (Quintile Thresholds Linear & Log) ==========
+with tabs[2]:
+    st.header("Income Quintile Thresholds Over Time")
+    quintile_cols = ['Lowest', 'Second', 'Third', 'Fourth', 'Lower.limit.of.top.5.percent..dollars.']
+    existing_cols = [col for col in quintile_cols if col in df.columns]
+    if not existing_cols:
+        st.error("None of the expected quintile columns were found in the dataset.")
+    else:
+        quintiles_by_year = df.groupby('year')[existing_cols].mean().reset_index()
+        melted = quintiles_by_year.melt(id_vars='year', var_name='Quintile', value_name='Threshold')
+        label_map = {
+            'Lowest': '1st Quintile (Lowest)',
+            'Second': '2nd Quintile',
+            'Third': '3rd Quintile',
+            'Fourth': '4th Quintile',
+            'Lower.limit.of.top.5.percent..dollars.': 'Top 5% Threshold'
+        }
+        melted['Quintile'] = melted['Quintile'].map(label_map)
+        # Linear Chart
+        fig_original = px.line(
+            melted, x='year', y='Threshold', color='Quintile', markers=True,
+            title='Income Quintile and Top 5% Thresholds Over Time (Linear Scale)',
+            labels={'year': 'Year', 'Threshold': 'Income Threshold ($)', 'Quintile': 'Income Group'},
+            color_discrete_sequence=px.colors.qualitative.Set1
+        )
+        st.subheader("Linear Scale")
+        st.plotly_chart(fig_original, use_container_width=True)
+        # Log Chart
+        melted_log = melted.copy()
+        melted_log['Log Threshold'] = np.log(melted_log['Threshold'])
+        fig_log = px.line(
+            melted_log, x='year', y='Log Threshold', color='Quintile', markers=True,
+            title='Log-Transformed Income Thresholds Over Time',
+            labels={'year': 'Year', 'Log Threshold': 'Log(Income Threshold)', 'Quintile': 'Income Group'},
+            color_discrete_sequence=px.colors.qualitative.Set1
+        )
+        st.subheader("Log-Transformed Scale")
+        st.plotly_chart(fig_log, use_container_width=True)
+        with st.expander("What does the log-transformation show?"):
+            st.markdown("""
+                The **original chart** shows rapid increases in income thresholds for higher quintiles, especially the **Top 5%**, which grows exponentially.
+                The **log-transformed chart** rescales this so we can compare **proportional growth rates**:
+                - A straight line on the log plot implies **constant exponential growth**
+                - Steeper slope = faster proportional increase
+                - Lower quintiles exhibit flatter slopes, indicating slower relative growth over time
+                **Conclusion:**
+                Log transformation reveals that income growth has **not been evenly distributed** across quintiles.
+                """)
+
+# ========== TAB 3: Income Trends (Mean, Median, Std Dev, with log plot) ==========
+with tabs[3]:
+    st.header("Income Trends: Mean, Median, & Std Dev (Linear & Log Scales)")
+    income_stats = df.groupby('year')['head_labor_income'].agg(['mean', 'median', 'std']).reset_index()
+    # Linear plot
+    fig_income = go.Figure([
+        go.Scatter(x=income_stats.year, y=income_stats['mean'], name='Mean', line_color='blue'),
+        go.Scatter(x=income_stats.year, y=income_stats['median'], name='Median', line_color='green'),
+        go.Scatter(x=income_stats.year, y=income_stats['mean'] + income_stats['std'], name='+1 Std Dev',
+                   line=dict(width=0), marker_color='rgba(0,0,255,0)'),
+        go.Scatter(x=income_stats.year, y=income_stats['mean'] - income_stats['std'], name='-1 Std Dev',
+                   line=dict(width=0), fill='tonexty', fillcolor='rgba(0,0,255,0.2)')
+    ])
+    fig_income.update_layout(title="Head Labor Income Over Time (Linear)", xaxis_title="Year", yaxis_title="Income ($)", template="plotly_white")
+    st.subheader("Linear Scale")
+    st.plotly_chart(fig_income, use_container_width=True)
+
+    # Log plot with correct std dev in log space
+    yearly = []
+    for year, group in df.groupby('year'):
+        incomes = group['head_labor_income']
+        log_incomes = np.log(incomes[incomes > 0])
+        yearly.append({
+            'year': year,
+            'log_mean': log_incomes.mean(),
+            'log_median': np.median(log_incomes),
+            'log_std': log_incomes.std()
+        })
+    income_stats_log = pd.DataFrame(yearly).sort_values('year')
+
+    fig_income_log = go.Figure([
+        go.Scatter(x=income_stats_log.year, y=income_stats_log['log_mean'], name='Log(Mean)', line_color='blue'),
+        go.Scatter(x=income_stats_log.year, y=income_stats_log['log_median'], name='Log(Median)', line_color='green'),
+        go.Scatter(x=income_stats_log.year, y=income_stats_log['log_mean'] + income_stats_log['log_std'], name='+1 Std Dev (log)',
+                   line=dict(width=0), marker_color='rgba(0,0,255,0)'),
+        go.Scatter(x=income_stats_log.year, y=income_stats_log['log_mean'] - income_stats_log['log_std'], name='-1 Std Dev (log)',
+                   line=dict(width=0), fill='tonexty', fillcolor='rgba(0,0,255,0.2)')
+    ])
+    fig_income_log.update_layout(title="Head Labor Income Over Time (Log-Transformed)", xaxis_title="Year", yaxis_title="Log(Income)", template="plotly_white")
+    st.subheader("Log-Transformed Scale")
+    st.plotly_chart(fig_income_log, use_container_width=True)
+
+# ========== TAB 4: Ever Reached Comparison (Early vs Later) ==========
+with tabs[4]:
+    st.header("Mobility at Horizon: Early vs. Later Periods (1968–1995 vs 1996–2022)")
+
+    start_range = get_quintile_range(start_quintile, start_quintile_comp, quintile_options)
+    goal_range = get_quintile_range(goal_quintile, goal_quintile_comp, quintile_options)
     early_period = (1968, 1995)
     late_period = (1996, 2022)
 
-    # --- Calculation per method ---
-    if ever_calc_mode == "Ever Reached (Plain)":
-        reached_early, total_early, _ = ever_reached_goal(df[df['year'].between(*early_period)], start_range, goal_range)
-        reached_late, total_late, _ = ever_reached_goal(df[df['year'].between(*late_period)], start_range, goal_range)
-        explanation = (
-            "Counts anyone who was *ever* observed in the start range, "
-            "and at *any* point also observed in the goal range."
-        )
-    elif ever_calc_mode == "Robust Mobility (Consecutive Years & Horizon)":
-        # Use improved robust_achievers for each period
-        _, n_achievers_early, n_total_early, _ = robust_achievers(
-            df[df['year'].between(*early_period)], start_range, goal_range,
-            time_horizon, consec_years)
-        _, n_achievers_late, n_total_late, _ = robust_achievers(
-            df[df['year'].between(*late_period)], start_range, goal_range,
-            time_horizon, consec_years)
-        reached_early, total_early = n_achievers_early, n_total_early
-        reached_late, total_late = n_achievers_late, n_total_late
-        explanation = (
-            f"Requires being in the start range, then reaching and remaining in the goal range "
-            f"for **{consec_years} consecutive survey years** after a horizon of {time_horizon} years. "
-            "Reflects robust mobility, not just one-time movement."
-        )
-    else:
-        reached_early = total_early = reached_late = total_late = 0
-        explanation = "Invalid selection."
+    # Calculate using the ONLY valid logic!
+    _, n_achievers_early, n_total_early, _ = robust_achievers_single_year(
+        df[df['year'].between(*early_period)], start_range, goal_range, time_horizon)
+    _, n_achievers_late, n_total_late, _ = robust_achievers_single_year(
+        df[df['year'].between(*late_period)], start_range, goal_range, time_horizon)
 
-    # --- Metrics and Plotting ---
+    reached_early, total_early = n_achievers_early, n_total_early
+    reached_late, total_late = n_achievers_late, n_total_late
+
+    explanation = (
+        "Counts anyone who was observed in the start range and was in the goal range at the time horizon (start year + time horizon), for each period. "
+        "All metrics use strict, year-matched horizon mobility, not ever-reached logic."
+    )
+
     if total_early == 0 and total_late == 0:
         st.warning("No valid individuals found in either period.")
     else:
@@ -306,7 +440,6 @@ with tabs[4]:
                 reached_late / total_late * 100 if total_late else 0
             ]
         })
-
         fig = px.bar(
             results_df,
             x="Period",
@@ -317,15 +450,13 @@ with tabs[4]:
                 "1968–1995": "#1f77b4",
                 "1996–2022": "#d62728"
             },
-            title="% Ever Reached Goal Quintile (Calculation Method: " + ever_calc_mode + ")",
+            title="% Reached Goal Quintile at Horizon",
             labels={"Reached Goal (%)": "% Reached Goal"},
             template="plotly_white"
         )
         fig.update_traces(texttemplate='%{text:.2f}%', textposition="outside")
         st.plotly_chart(fig, use_container_width=True)
-
     st.info(f"**Calculation Explanation:** {explanation}")
-
 
 
 # ========== TAB 5: Multi-Person Income Trajectories ========== #
