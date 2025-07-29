@@ -10,10 +10,9 @@ st.set_page_config(layout="wide", page_title="Economic Mobility Dashboard")
 def load_data(path):
     return pd.read_csv(path)
 
+DATA_PATH = "dream_92.csv"
 
-DATA_PATH = "dream.csv"
 df = load_data(DATA_PATH)
-
 
 st.set_page_config(layout="wide", page_title="Economic Mobility Dashboard")
 
