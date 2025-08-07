@@ -1,0 +1,13 @@
+ggplot2
+foreign
+mosaic
+car
+tidyverse
+tidyr
+dplyr
+caret
+magrittr
+readxl
+scales
+purr
+readr
